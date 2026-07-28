@@ -1,5 +1,27 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Local configuration
+
+Create a `.env.local` file in the project root:
+
+```bash
+OPENAI_API_KEY=your_openai_api_key
+DATABASE_URL=postgresql://user:password@localhost:5432/database
+SERP_API_KEY=your_serpapi_key
+# Optional; defaults to gpt-5
+OPENAI_MODEL=gpt-5
+```
+
+The app creates `Unregistered user` and `Travel agent` rows in `users` when
+needed. Messages are attributed to those rows for storage. The active
+conversation is kept in browser session storage and included as context in
+later agent requests. Refreshing the same tab preserves it; closing the
+tab/browser starts a new conversation and does not reload older database rows.
+
+For requests involving specific flight routes and dates, the agent can search
+Google Flights through SerpApi. Flight searches run only on the server and the
+SerpApi key is never exposed to the browser.
+
 ## Getting Started
 
 First, run the development server:
