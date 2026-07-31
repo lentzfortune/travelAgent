@@ -20,6 +20,7 @@
 }
 
 body {
+  min-width: 320px;
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
@@ -31,20 +32,21 @@ body {
 }
 
 #home {
-  height: 100vh;
-  padding: 48px;
+  --page-padding: clamp(16px, 4vw, 48px);
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: var(--page-padding);
   background:
     radial-gradient(circle at 12% 10%, rgba(72, 187, 162, 0.18), transparent 32%),
     #f4f7f5;
 }
 
 .chat-layout {
-  display: flex;
-  flex-direction: row;
-  gap: 24px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.8fr);
+  gap: clamp(16px, 2vw, 24px);
   width: min(1180px, 100%);
-  height: 100%;
-  min-height: 0;
+  min-height: calc(100dvh - (2 * var(--page-padding)));
   margin: 0 auto;
 }
 
@@ -59,10 +61,9 @@ body {
 .goal-panel {
   position: relative;
   display: flex;
-  flex: 1.4;
   align-items: center;
   overflow: hidden;
-  padding: 56px;
+  padding: clamp(28px, 4.5vw, 56px);
 }
 
 .goal-panel > form {
@@ -98,9 +99,9 @@ h2 {
 
 h1 {
   max-width: 520px;
-  margin-bottom: 36px;
-  font-size: clamp(2.3rem, 5vw, 4.5rem);
-  line-height: 1;
+  margin-bottom: clamp(24px, 3vw, 36px);
+  font-size: clamp(2.15rem, 4.5vw, 4.5rem);
+  line-height: 0.98;
   letter-spacing: -0.055em;
 }
 
@@ -129,6 +130,7 @@ textarea {
   color: #17382f;
   font: inherit;
   line-height: 1.5;
+  overflow-wrap: anywhere;
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
@@ -145,6 +147,12 @@ input {
   font: inherit;
   text-transform: uppercase;
   transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+input,
+textarea,
+button {
+  min-height: 44px;
 }
 
 input[type="number"] {
@@ -200,6 +208,7 @@ button {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 button:hover {
@@ -219,9 +228,8 @@ button:disabled {
 
 .history-panel {
   display: flex;
-  flex: 0.8;
   flex-direction: column;
-  min-width: 300px;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   padding: 32px;
@@ -298,41 +306,110 @@ button:disabled {
 .message p {
   margin: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: 1.5;
 }
 
-@media (max-width: 760px) {
-  #home {
-    padding: 20px;
-  }
-
+@media (max-width: 1000px) {
   .chat-layout {
-    flex-direction: column;
-    height: auto;
-    min-height: auto;
-  }
-
-  #home {
-    height: auto;
-    min-height: 100vh;
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
   }
 
   .goal-panel {
-    min-height: 600px;
-    padding: 32px 24px;
+    min-height: min(680px, calc(100dvh - (2 * var(--page-padding))));
   }
 
   .history-panel {
-    min-width: 0;
     height: min(640px, 70vh);
     min-height: 360px;
   }
+}
+
+@media (max-width: 640px) {
+  #home {
+    --page-padding: clamp(10px, 4vw, 20px);
+  }
+
+  .goal-panel,
+  .history-panel {
+    border-radius: 18px;
+  }
+
+  .goal-panel {
+    min-height: 0;
+    padding: 28px clamp(18px, 5vw, 28px);
+  }
+
+  .airplane {
+    right: -90px;
+    bottom: -35px;
+    width: 260px;
+  }
+
+  h1 {
+    font-size: clamp(2rem, 11vw, 3.25rem);
+    letter-spacing: -0.045em;
+  }
 
   .trip-form-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .trip-days {
-    grid-column: 1 / -1;
+    grid-column: auto;
+  }
+
+  .history-panel {
+    height: min(600px, 72dvh);
+    min-height: 320px;
+    padding: clamp(20px, 5vw, 28px);
+  }
+
+  .history-header,
+  .message-list {
+    padding-top: 18px;
+  }
+
+  .history-header {
+    padding-top: 0;
+    padding-bottom: 18px;
+  }
+
+  .message-user {
+    margin-left: 12px;
+  }
+
+  .message-assistant {
+    margin-right: 12px;
+  }
+
+  button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .goal-panel {
+    padding-inline: 16px;
+  }
+
+  .history-panel {
+    padding-inline: 16px;
+  }
+
+  input,
+  textarea {
+    padding-inline: 12px;
+  }
+}
+
+@media (max-height: 720px) and (min-width: 1001px) {
+  .chat-layout {
+    min-height: 680px;
+  }
+
+  .goal-panel {
+    align-items: flex-start;
   }
 }

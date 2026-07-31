@@ -7,6 +7,13 @@ export const runtime = "nodejs";
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const USER_NAME = "Unregistered user";
 const AGENT_NAME = "Travel agent";
+const EMBEDDING_MODEL = "text-embedding-3-small";
+const SEMANTIC_CACHE_THRESHOLD = Number(
+  process.env.SEMANTIC_CACHE_THRESHOLD || "0.95",
+);
+const SEMANTIC_CACHE_MAX_AGE_MINUTES = Number(
+  process.env.SEMANTIC_CACHE_MAX_AGE_MINUTES || "15",
+);
 const MAX_CONTEXT_MESSAGES = 40;
 
 const TRAVEL_AGENT_INSTRUCTIONS = `
@@ -270,25 +277,84 @@ async function createAgentResponse(
   throw new Error("The flight search used too many tool rounds.");
 }
 
-async function getOrCreateUser(client: PoolClient, name: string) {
-  const existing = await client.query<{ userid: number }>(
-    `SELECT userid FROM users
-     WHERE LOWER(name) = LOWER($1)
-     ORDER BY userid LIMIT 1`,
-    [name],
-  );
-  if (existing.rows[0]) return existing.rows[0].userid;
+async function createEmbedding(openai: OpenAI, text: string) {
+  const response = await openai.embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: text,
+    encoding_format: "float",
+  });
 
-  const created = await client.query<{ userid: number }>(
-    "INSERT INTO users (name) VALUES ($1) RETURNING userid",
-    [name],
+  const embedding = response.data[0]?.embedding;
+  if (!embedding) throw new Error("OpenAI returned an empty embedding.");
+  return `[${embedding.join(",")}]`;
+}
+
+type CachedResponse = {
+  answer: string;
+  embedding: string;
+  similarity: number;
+};
+
+async function findCachedAgentResponse(
+  client: PoolClient,
+  agentId: number,
+  queryEmbedding: string,
+) {
+  const result = await client.query<CachedResponse>(
+    `SELECT
+       userinput AS answer,
+       embedding::text AS embedding,
+       1 - (embedding <=> $1::vector) AS similarity
+     FROM message
+     WHERE user_id = $2
+       AND created_at >= now() - ($3 * interval '1 minute')
+     ORDER BY embedding <=> $1::vector
+     LIMIT 1`,
+    [queryEmbedding, agentId, SEMANTIC_CACHE_MAX_AGE_MINUTES],
   );
-  return created.rows[0].userid;
+  const match = result.rows[0];
+  return match && match.similarity >= SEMANTIC_CACHE_THRESHOLD ? match : null;
+}
+
+async function getOrCreateCategory(client: PoolClient, categoryName: string) {
+  const result = await client.query<{ category_id: number }>(
+    `INSERT INTO usercategory (categoryname)
+     VALUES ($1)
+     ON CONFLICT (categoryname)
+     DO UPDATE SET categoryname = EXCLUDED.categoryname
+     RETURNING category_id`,
+    [categoryName],
+  );
+  return result.rows[0].category_id;
+}
+
+async function getOrCreateUser(
+  client: PoolClient,
+  userName: string,
+  categoryId: number,
+) {
+  const existing = await client.query<{ id: number }>(
+    `SELECT id FROM users
+     WHERE LOWER(username) = LOWER($1) AND category_id = $2
+     ORDER BY id LIMIT 1`,
+    [userName, categoryId],
+  );
+  if (existing.rows[0]) return existing.rows[0].id;
+
+  const created = await client.query<{ id: number }>(
+    `INSERT INTO users (username, category_id)
+     VALUES ($1, $2)
+     RETURNING id`,
+    [userName, categoryId],
+  );
+  return created.rows[0].id;
 }
 
 async function getParticipants(client: PoolClient) {
-  const userId = await getOrCreateUser(client, USER_NAME);
-  const agentId = await getOrCreateUser(client, AGENT_NAME);
+  const userCategoryId = await getOrCreateCategory(client, "user");
+  const agentCategoryId = await getOrCreateCategory(client, "assistant");
+  const userId = await getOrCreateUser(client, USER_NAME, userCategoryId);
+  const agentId = await getOrCreateUser(client, AGENT_NAME, agentCategoryId);
   return { userId, agentId };
 }
 
@@ -387,38 +453,68 @@ export async function POST(request: Request) {
       );
     }
 
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const userEmbedding = await createEmbedding(openai, message);
+    const pendingUserMessage: StoredMessage = {
+      id: 0,
+      role: "user",
+      content: message,
+      createdAt: new Date().toISOString(),
+    };
+    const history = [...requestHistory, pendingUserMessage];
+
     client = await pool.connect();
     await client.query("BEGIN");
     const { userId, agentId } = await getParticipants(client);
+    const cachedResponse = await findCachedAgentResponse(
+      client,
+      agentId,
+      userEmbedding,
+    );
+    let answer: string;
+    let agentEmbedding: string;
+    let cacheSimilarity: number | null = null;
+
+    if (cachedResponse) {
+      answer = cachedResponse.answer;
+      agentEmbedding = cachedResponse.embedding;
+      cacheSimilarity = cachedResponse.similarity;
+    } else {
+      await client.query("COMMIT");
+      client.release();
+      client = undefined;
+
+      answer = await createAgentResponse(openai, history);
+      if (!answer) throw new Error("OpenAI returned an empty response.");
+      agentEmbedding = await createEmbedding(openai, answer);
+
+      client = await pool.connect();
+      await client.query("BEGIN");
+    }
+
     const userMessageResult = await client.query<{
       id: number;
       created_at: Date;
     }>(
-      `INSERT INTO messages (user_id, message)
-       VALUES ($1, $2)
-       RETURNING messageid AS id, created_at`,
-      [userId, message],
+      `INSERT INTO message (user_id, userinput, embedding)
+       VALUES ($1, $2, $3::vector)
+       RETURNING message_id AS id, created_at`,
+      [userId, message, userEmbedding],
     );
-
     const userMessage: StoredMessage = {
+      ...pendingUserMessage,
       id: userMessageResult.rows[0].id,
-      role: "user",
-      content: message,
       createdAt: userMessageResult.rows[0].created_at.toISOString(),
     };
-    const history = [...requestHistory, userMessage];
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const answer = await createAgentResponse(openai, history);
-    if (!answer) throw new Error("OpenAI returned an empty response.");
 
     const agentMessageResult = await client.query<{
       id: number;
       created_at: Date;
     }>(
-      `INSERT INTO messages (user_id, message)
-       VALUES ($1, $2)
-       RETURNING messageid AS id, created_at`,
-      [agentId, answer],
+      `INSERT INTO message (user_id, userinput, embedding)
+       VALUES ($1, $2, $3::vector)
+       RETURNING message_id AS id, created_at`,
+      [agentId, answer, agentEmbedding],
     );
     const agentMessage: StoredMessage = {
       id: agentMessageResult.rows[0].id,
@@ -431,6 +527,10 @@ export async function POST(request: Request) {
     return Response.json({
       answer,
       messages: [...requestHistory, userMessage, agentMessage],
+      cache: {
+        hit: cacheSimilarity !== null,
+        similarity: cacheSimilarity,
+      },
     });
   } catch (error) {
     if (client) await client.query("ROLLBACK").catch(() => undefined);
